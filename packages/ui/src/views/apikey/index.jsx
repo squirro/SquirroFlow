@@ -391,7 +391,7 @@ const APIKey = () => {
                             search={true}
                             searchPlaceholder='Search API Keys'
                             title='API Keys'
-                            description='Flowise API & SDK authentication keys'
+                            description='SquirroFlow API & SDK authentication keys'
                         >
                             <StyledPermissionButton
                                 permissionId={'apikeys:create'}

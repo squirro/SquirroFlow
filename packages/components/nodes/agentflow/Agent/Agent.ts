@@ -351,6 +351,14 @@ class Agent_Agentflow implements INode {
                 optional: true
             },
             {
+                label: 'Execute All Tools',
+                name: 'scatterGather',
+                description:
+                    'When enabled, invoke ALL attached tools in parallel regardless of LLM tool_calls. The user input query is passed as the argument to each tool.',
+                type: 'boolean',
+                optional: true
+            },
+            {
                 label: 'Memory Type',
                 name: 'agentMemoryType',
                 type: 'options',
@@ -697,6 +705,7 @@ class Agent_Agentflow implements INode {
             const modelName = modelConfig?.model ?? modelConfig?.modelName
 
             // Extract tools
+            const scatterGather = nodeData.inputs?.scatterGather as boolean
             const tools = nodeData.inputs?.agentTools as ITool[]
 
             const toolsInstance: Tool[] = []
@@ -897,7 +906,9 @@ class Agent_Agentflow implements INode {
             const userMessage = nodeData.inputs?.agentUserMessage as string
             const _agentUpdateState = nodeData.inputs?.agentUpdateState
             const _agentStructuredOutput = nodeData.inputs?.agentStructuredOutput
-            const agentMessages = (nodeData.inputs?.agentMessages as unknown as ILLMMessage[]) ?? []
+            const agentMessages = Array.isArray(nodeData.inputs?.agentMessages)
+                ? (nodeData.inputs.agentMessages as unknown as ILLMMessage[])
+                : []
 
             // Extract runtime state and history
             const state = options.agentflowRuntime?.state as ICommonObject
@@ -1197,7 +1208,7 @@ class Agent_Agentflow implements INode {
             // Address built in tools (after artifacts are processed)
             const builtInUsedTools: IUsedTool[] = await this.extractBuiltInUsedTools(response, [])
 
-            if (!humanInput && response.tool_calls && response.tool_calls.length > 0) {
+            if (!humanInput && (scatterGather || (response.tool_calls && response.tool_calls.length > 0))) {
                 const result = await this.handleToolCalls({
                     response,
                     messages,
@@ -1212,6 +1223,7 @@ class Agent_Agentflow implements INode {
                     isLastNode,
                     iterationContext,
                     isStructuredOutput,
+                    scatterGather,
                     accumulatedReasonContent: reasonContent,
                     accumulatedReasoningDuration: thinkingDuration
                 })
@@ -2154,6 +2166,7 @@ class Agent_Agentflow implements INode {
         isLastNode,
         iterationContext,
         isStructuredOutput = false,
+        scatterGather = false,
         accumulatedReasonContent: initialAccumulatedReasonContent,
         accumulatedReasoningDuration: initialAccumulatedReasoningDuration
     }: {
@@ -2170,6 +2183,7 @@ class Agent_Agentflow implements INode {
         isLastNode: boolean
         iterationContext: ICommonObject
         isStructuredOutput?: boolean
+        scatterGather?: boolean
         accumulatedReasonContent?: string
         accumulatedReasoningDuration?: number
     }): Promise<{
@@ -2191,6 +2205,25 @@ class Agent_Agentflow implements INode {
         // Use reasoning from caller (first turn); subsequent turns are added when we get newResponse
         let accumulatedReasonContent = initialAccumulatedReasonContent ?? ''
         let accumulatedReasoningDuration = initialAccumulatedReasoningDuration ?? 0
+
+        if (scatterGather) {
+            const existingCalls = response.tool_calls ?? []
+            const existingToolNames = new Set(existingCalls.map((c: any) => c.name))
+            const inputStr = typeof input === 'string' ? input : JSON.stringify(input)
+
+            const syntheticCalls = toolsInstance
+                .filter((tool) => !existingToolNames.has(tool.name))
+                .map((tool) => ({
+                    name: tool.name,
+                    args: { input: inputStr },
+                    id: `sg_${randomBytes(12).toString('hex')}`,
+                    type: 'tool_call' as const
+                }))
+
+            if (syntheticCalls.length > 0) {
+                response.tool_calls = [...existingCalls, ...syntheticCalls] as any
+            }
+        }
 
         if (!response.tool_calls || response.tool_calls.length === 0) {
             return {
@@ -2241,24 +2274,13 @@ class Agent_Agentflow implements INode {
             usage_metadata: response.usage_metadata
         })
 
-        // Process each tool call
+        // Check for human input tools first (applies to both parallel and sequential)
         for (let i = 0; i < response.tool_calls.length; i++) {
             const toolCall = response.tool_calls[i]
-
             const selectedTool = toolsInstance.find((tool) => tool.name === toolCall.name)
             if (selectedTool) {
-                let parsedDocs
-                let parsedArtifacts
-                let isToolRequireHumanInput =
+                const isToolRequireHumanInput =
                     (selectedTool as any).requiresHumanInput && (!iterationContext || Object.keys(iterationContext).length === 0)
-
-                const flowConfig = {
-                    chatflowId: options.chatflowid,
-                    sessionId: options.sessionId,
-                    chatId: options.chatId,
-                    input: input,
-                    state: options.agentflowRuntime?.state
-                }
 
                 if (isToolRequireHumanInput) {
                     const toolCallDetails = '```json\n' + JSON.stringify(toolCall, null, 2) + '\n```'
@@ -2278,78 +2300,25 @@ class Agent_Agentflow implements INode {
                         accumulatedReasoningDuration: accumulatedReasoningDuration || undefined
                     }
                 }
+            }
+        }
 
-                let toolIds: ICommonObject | undefined
-                if (options.analyticHandlers) {
-                    toolIds = await options.analyticHandlers.onToolStart(toolCall.name, toolCall.args, options.parentTraceIds)
-                }
+        if (scatterGather) {
+            // Execute all tool calls in parallel
+            const toolCallPromises = response.tool_calls.map(async (toolCall: any) => {
+                const selectedTool = toolsInstance.find((tool) => tool.name === toolCall.name)
+                if (!selectedTool) return null
 
                 try {
-                    //@ts-ignore
-                    let toolOutput = await selectedTool.call(toolCall.args, { signal: abortController?.signal }, undefined, flowConfig)
-
-                    if (options.analyticHandlers && toolIds) {
-                        await options.analyticHandlers.onToolEnd(toolIds, toolOutput)
-                    }
-
-                    // Extract source documents if present
-                    if (typeof toolOutput === 'string' && toolOutput.includes(SOURCE_DOCUMENTS_PREFIX)) {
-                        const [output, docs] = toolOutput.split(SOURCE_DOCUMENTS_PREFIX)
-                        toolOutput = output
-                        try {
-                            parsedDocs = JSON.parse(docs)
-                            sourceDocuments.push(parsedDocs)
-                        } catch (e) {
-                            console.error('Error parsing source documents from tool:', e)
-                        }
-                    }
-
-                    // Extract artifacts if present
-                    if (typeof toolOutput === 'string' && toolOutput.includes(ARTIFACTS_PREFIX)) {
-                        const [output, artifact] = toolOutput.split(ARTIFACTS_PREFIX)
-                        toolOutput = output
-                        try {
-                            parsedArtifacts = JSON.parse(artifact)
-                            artifacts.push(parsedArtifacts)
-                        } catch (e) {
-                            console.error('Error parsing artifacts from tool:', e)
-                        }
-                    }
-
-                    let toolInput
-                    if (typeof toolOutput === 'string' && toolOutput.includes(TOOL_ARGS_PREFIX)) {
-                        const [output, args] = toolOutput.split(TOOL_ARGS_PREFIX)
-                        toolOutput = output
-                        try {
-                            toolInput = JSON.parse(args)
-                        } catch (e) {
-                            console.error('Error parsing tool input from tool:', e)
-                        }
-                    }
-
-                    // Add tool message to conversation
-                    messages.push({
-                        role: 'tool',
-                        content: toolOutput,
-                        tool_call_id: toolCall.id,
-                        name: toolCall.name,
-                        additional_kwargs: {
-                            artifacts: parsedArtifacts,
-                            sourceDocuments: parsedDocs
-                        }
-                    })
-
-                    // Track used tools
-                    usedTools.push({
-                        tool: toolCall.name,
-                        toolInput: toolInput ?? toolCall.args,
-                        toolOutput
+                    return await this.executeSingleTool({
+                        toolCall,
+                        selectedTool,
+                        input,
+                        options,
+                        abortController,
+                        iterationContext
                     })
                 } catch (e) {
-                    if (options.analyticHandlers && toolIds) {
-                        await options.analyticHandlers.onToolEnd(toolIds, e)
-                    }
-
                     console.error('Error invoking tool:', e)
                     const errMsg = getErrorMessage(e)
                     let toolInput = toolCall.args
@@ -2361,15 +2330,97 @@ class Agent_Agentflow implements INode {
                             console.error('Error parsing tool input from tool:', e)
                         }
                     }
+                    return {
+                        message: {
+                            role: 'tool' as const,
+                            content: `Error: ${errMsg}`,
+                            tool_call_id: toolCall.id,
+                            name: toolCall.name,
+                            additional_kwargs: {}
+                        },
+                        usedTool: {
+                            tool: selectedTool.name,
+                            toolInput,
+                            toolOutput: '',
+                            error: errMsg
+                        } as IUsedTool,
+                        sourceDocuments: undefined,
+                        artifacts: undefined,
+                        error: errMsg
+                    }
+                }
+            })
 
-                    usedTools.push({
-                        tool: selectedTool.name,
-                        toolInput,
-                        toolOutput: '',
-                        error: getErrorMessage(e)
-                    })
-                    sseStreamer?.streamUsedToolsEvent(chatId, flatten(usedTools))
-                    throw new Error(getErrorMessage(e))
+            const results = await Promise.all(toolCallPromises)
+
+            // Aggregate results
+            const errors: string[] = []
+            for (const result of results) {
+                if (!result) continue
+                messages.push(result.message)
+                usedTools.push(result.usedTool)
+                if (result.sourceDocuments) sourceDocuments.push(result.sourceDocuments)
+                if (result.artifacts) artifacts.push(result.artifacts)
+                if ((result as any).error) errors.push((result as any).error)
+            }
+
+            // If all tools failed, throw
+            if (errors.length > 0 && errors.length === results.filter(Boolean).length) {
+                sseStreamer?.streamUsedToolsEvent(chatId, flatten(usedTools))
+                throw new Error(errors[0])
+            }
+        } else {
+            // Process each tool call sequentially
+            for (let i = 0; i < response.tool_calls.length; i++) {
+                const toolCall = response.tool_calls[i]
+
+                const selectedTool = toolsInstance.find((tool) => tool.name === toolCall.name)
+                if (selectedTool) {
+                    let toolIds: ICommonObject | undefined
+                    if (options.analyticHandlers) {
+                        toolIds = await options.analyticHandlers.onToolStart(toolCall.name, toolCall.args, options.parentTraceIds)
+                    }
+
+                    try {
+                        const result = await this.executeSingleTool({
+                            toolCall,
+                            selectedTool,
+                            input,
+                            options,
+                            abortController,
+                            iterationContext
+                        })
+
+                        messages.push(result.message)
+                        usedTools.push(result.usedTool)
+                        if (result.sourceDocuments) sourceDocuments.push(result.sourceDocuments)
+                        if (result.artifacts) artifacts.push(result.artifacts)
+                    } catch (e) {
+                        if (options.analyticHandlers && toolIds) {
+                            await options.analyticHandlers.onToolEnd(toolIds, e)
+                        }
+
+                        console.error('Error invoking tool:', e)
+                        const errMsg = getErrorMessage(e)
+                        let toolInput = toolCall.args
+                        if (typeof errMsg === 'string' && errMsg.includes(TOOL_ARGS_PREFIX)) {
+                            const [_, args] = errMsg.split(TOOL_ARGS_PREFIX)
+                            try {
+                                toolInput = JSON.parse(args)
+                            } catch (e) {
+                                console.error('Error parsing tool input from tool:', e)
+                            }
+                        }
+
+                        usedTools.push({
+                            tool: selectedTool.name,
+                            toolInput,
+                            toolOutput: '',
+                            error: getErrorMessage(e)
+                        })
+                        sseStreamer?.streamUsedToolsEvent(chatId, flatten(usedTools))
+                        throw new Error(getErrorMessage(e))
+                    }
                 }
             }
         }
@@ -2499,6 +2550,106 @@ class Agent_Agentflow implements INode {
             isWaitingForHumanInput,
             accumulatedReasonContent: accumulatedReasonContent || undefined,
             accumulatedReasoningDuration: accumulatedReasoningDuration || undefined
+        }
+    }
+
+    /**
+     * Executes a single tool call and returns its result
+     */
+    private async executeSingleTool({
+        toolCall,
+        selectedTool,
+        input,
+        options,
+        abortController,
+        iterationContext
+    }: {
+        toolCall: any
+        selectedTool: Tool
+        input: string | Record<string, any>
+        options: ICommonObject
+        abortController: AbortController
+        iterationContext: ICommonObject
+    }): Promise<{
+        message: any
+        usedTool: IUsedTool
+        sourceDocuments?: any
+        artifacts?: any
+    }> {
+        const flowConfig = {
+            chatflowId: options.chatflowid,
+            sessionId: options.sessionId,
+            chatId: options.chatId,
+            input: input,
+            state: options.agentflowRuntime?.state
+        }
+
+        let toolIds: ICommonObject | undefined
+        if (options.analyticHandlers) {
+            toolIds = await options.analyticHandlers.onToolStart(toolCall.name, toolCall.args, options.parentTraceIds)
+        }
+
+        let parsedDocs
+        let parsedArtifacts
+
+        //@ts-ignore
+        let toolOutput = await selectedTool.call(toolCall.args, { signal: abortController?.signal }, undefined, flowConfig)
+
+        if (options.analyticHandlers && toolIds) {
+            await options.analyticHandlers.onToolEnd(toolIds, toolOutput)
+        }
+
+        // Extract source documents if present
+        if (typeof toolOutput === 'string' && toolOutput.includes(SOURCE_DOCUMENTS_PREFIX)) {
+            const [output, docs] = toolOutput.split(SOURCE_DOCUMENTS_PREFIX)
+            toolOutput = output
+            try {
+                parsedDocs = JSON.parse(docs)
+            } catch (e) {
+                console.error('Error parsing source documents from tool:', e)
+            }
+        }
+
+        // Extract artifacts if present
+        if (typeof toolOutput === 'string' && toolOutput.includes(ARTIFACTS_PREFIX)) {
+            const [output, artifact] = toolOutput.split(ARTIFACTS_PREFIX)
+            toolOutput = output
+            try {
+                parsedArtifacts = JSON.parse(artifact)
+            } catch (e) {
+                console.error('Error parsing artifacts from tool:', e)
+            }
+        }
+
+        let toolInput
+        if (typeof toolOutput === 'string' && toolOutput.includes(TOOL_ARGS_PREFIX)) {
+            const [output, args] = toolOutput.split(TOOL_ARGS_PREFIX)
+            toolOutput = output
+            try {
+                toolInput = JSON.parse(args)
+            } catch (e) {
+                console.error('Error parsing tool input from tool:', e)
+            }
+        }
+
+        return {
+            message: {
+                role: 'tool',
+                content: toolOutput,
+                tool_call_id: toolCall.id,
+                name: toolCall.name,
+                additional_kwargs: {
+                    artifacts: parsedArtifacts,
+                    sourceDocuments: parsedDocs
+                }
+            },
+            usedTool: {
+                tool: toolCall.name,
+                toolInput: toolInput ?? toolCall.args,
+                toolOutput
+            },
+            sourceDocuments: parsedDocs,
+            artifacts: parsedArtifacts
         }
     }
 
