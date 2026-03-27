@@ -1821,10 +1821,13 @@ export const processTemplateVariables = (state: ICommonObject, finalOutput: any)
     const newState = { ...state }
 
     for (const key in newState) {
-        const stateValue = newState[key].toString()
+        const stateValue = newState[key].toString().trim()
         if (stateValue.includes('{{ output') || stateValue.includes('{{output')) {
-            // Handle simple output replacement (with or without spaces)
-            if (stateValue === '{{ output }}' || stateValue === '{{output}}') {
+            // Normalize whitespace: "{{output}}", "{{ output }}", "{{output }} ", etc. all match
+            const normalized = stateValue.replace(/\s+/g, ' ').trim()
+
+            // Handle simple output replacement (any whitespace variant)
+            if (/^\{\{\s*output\s*\}\}$/.test(normalized)) {
                 newState[key] = finalOutput
                 continue
             }
@@ -1845,8 +1848,8 @@ export const processTemplateVariables = (state: ICommonObject, finalOutput: any)
                     newState[key] = stateValue
                 }
             } else {
-                // Handle simple {{ output }} replacement for backward compatibility
-                newState[key] = newState[key].replaceAll('{{ output }}', finalOutput)
+                // Handle {{ output }} replacement within larger strings (any whitespace variant)
+                newState[key] = newState[key].replace(/\{\{\s*output\s*\}\}/g, finalOutput)
             }
         }
     }
