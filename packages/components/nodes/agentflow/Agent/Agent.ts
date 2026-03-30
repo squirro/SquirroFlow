@@ -1473,7 +1473,7 @@ class Agent_Agentflow implements INode {
             // Process template variables in state
             const outputForStateProcessing =
                 isStructuredOutput && typeof response === 'object' ? JSON.stringify(response, null, 2) : finalResponse
-            newState = processTemplateVariables(newState, outputForStateProcessing)
+            newState = processTemplateVariables(newState, outputForStateProcessing, usedTools)
 
             /**
              * Remove temporary artifact image messages (they were only needed for the model invoke).

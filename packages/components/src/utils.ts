@@ -1813,7 +1813,7 @@ export const createCodeExecutionSandbox = (
  * @param {any} finalOutput - The output value to substitute
  * @returns {ICommonObject} - The processed state object
  */
-export const processTemplateVariables = (state: ICommonObject, finalOutput: any): ICommonObject => {
+export const processTemplateVariables = (state: ICommonObject, finalOutput: any, usedTools?: any[]): ICommonObject => {
     if (!state || Object.keys(state).length === 0) {
         return state
     }
@@ -1822,6 +1822,43 @@ export const processTemplateVariables = (state: ICommonObject, finalOutput: any)
 
     for (const key in newState) {
         const stateValue = newState[key].toString().trim()
+
+        // Handle {{ tools }} and {{ tools.N }} template variables
+        if (stateValue.includes('{{ tools') || stateValue.includes('{{tools')) {
+            const toolOutputs = (usedTools || []).map((t: any) => t.toolOutput ?? '')
+
+            // {{ tools }} — all tool outputs as JSON array
+            if (/^\{\{\s*tools\s*\}\}$/.test(stateValue.replace(/\s+/g, ' ').trim())) {
+                newState[key] = JSON.stringify(toolOutputs)
+                continue
+            }
+
+            // {{ tools.N }} — Nth tool output (0-indexed)
+            const toolIndexMatch = stateValue.match(/\{\{\s*tools\.(\d+)\s*\}\}/)
+            if (toolIndexMatch) {
+                const idx = parseInt(toolIndexMatch[1], 10)
+                newState[key] = idx < toolOutputs.length ? toolOutputs[idx] : ''
+                continue
+            }
+
+            // {{ tools.N.field }} — Nth tool, specific field (tool, toolInput, toolOutput)
+            const toolFieldMatch = stateValue.match(/\{\{\s*tools\.(\d+)\.([\w.]+)\s*\}\}/)
+            if (toolFieldMatch) {
+                const idx = parseInt(toolFieldMatch[1], 10)
+                const field = toolFieldMatch[2]
+                if (idx < (usedTools || []).length) {
+                    const value = get((usedTools || [])[idx], field)
+                    newState[key] = value !== undefined ? (typeof value === 'object' ? JSON.stringify(value) : value) : ''
+                } else {
+                    newState[key] = ''
+                }
+                continue
+            }
+
+            // Inline replacement for {{ tools }} within larger strings
+            newState[key] = newState[key].replace(/\{\{\s*tools\s*\}\}/g, JSON.stringify(toolOutputs))
+        }
+
         if (stateValue.includes('{{ output') || stateValue.includes('{{output')) {
             // Normalize whitespace: "{{output}}", "{{ output }}", "{{output }} ", etc. all match
             const normalized = stateValue.replace(/\s+/g, ' ').trim()
