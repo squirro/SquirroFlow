@@ -117,6 +117,31 @@ class AgentAsTool_Tools implements INode {
                 show: {
                     useQuestionFromChat: false
                 }
+            },
+            {
+                label: 'Forward State',
+                name: 'forwardState',
+                description:
+                    'Forward flow state values to the sub-agent as startState. The sub-agent must have startState enabled as an overridable parameter.',
+                type: 'array',
+                optional: true,
+                additionalParams: true,
+                acceptVariable: true,
+                array: [
+                    {
+                        label: 'Key',
+                        name: 'key',
+                        type: 'string',
+                        placeholder: 'State key in the sub-agent'
+                    },
+                    {
+                        label: 'Value',
+                        name: 'value',
+                        type: 'string',
+                        acceptVariable: true,
+                        placeholder: 'Value to pass'
+                    }
+                ]
             }
         ]
     }
@@ -164,6 +189,7 @@ class AgentAsTool_Tools implements INode {
                 : nodeData.inputs?.overrideConfig
 
         const startNewSession = nodeData.inputs?.startNewSession as boolean
+        const forwardState = nodeData.inputs?.forwardState as { key: string; value: string }[] | undefined
 
         const baseURL = (nodeData.inputs?.baseURL as string) || (options.baseURL as string)
 
@@ -194,6 +220,17 @@ class AgentAsTool_Tools implements INode {
 
         let name = _name || 'agentflow_tool'
 
+        // Build startState from Forward State mappings
+        let forwardedStartState: ICommonObject | undefined
+        if (forwardState && Array.isArray(forwardState) && forwardState.length > 0) {
+            forwardedStartState = {}
+            for (const item of forwardState) {
+                if (item.key && item.value !== undefined) {
+                    forwardedStartState[item.key] = item.value
+                }
+            }
+        }
+
         return new AgentflowTool({
             name,
             baseURL,
@@ -203,7 +240,8 @@ class AgentAsTool_Tools implements INode {
             startNewSession,
             headers,
             input: toolInput,
-            overrideConfig
+            overrideConfig,
+            forwardedStartState
         })
     }
 }
@@ -229,6 +267,8 @@ class AgentflowTool extends StructuredTool {
 
     overrideConfig?: object
 
+    forwardedStartState?: ICommonObject
+
     schema = z.object({
         input: z.string().describe('input question')
         // overrideConfig: z.record(z.any()).optional().describe('override config'), // This will be passed to the Agent, so comment it for now.
@@ -243,7 +283,8 @@ class AgentflowTool extends StructuredTool {
         startNewSession,
         baseURL,
         headers,
-        overrideConfig
+        overrideConfig,
+        forwardedStartState
     }: {
         name: string
         description: string
@@ -254,6 +295,7 @@ class AgentflowTool extends StructuredTool {
         baseURL: string
         headers: ICommonObject
         overrideConfig?: object
+        forwardedStartState?: ICommonObject
     }) {
         super()
         this.name = name
@@ -264,6 +306,7 @@ class AgentflowTool extends StructuredTool {
         this.headers = headers
         this.agentflowid = agentflowid
         this.overrideConfig = overrideConfig
+        this.forwardedStartState = forwardedStartState
         this.returnDirect = returnDirect
     }
 
@@ -328,6 +371,7 @@ class AgentflowTool extends StructuredTool {
             chatId: this.startNewSession ? uuidv4() : flowConfig?.chatId,
             overrideConfig: {
                 sessionId: this.startNewSession ? uuidv4() : flowConfig?.sessionId,
+                ...(this.forwardedStartState ? { startState: this.forwardedStartState } : {}),
                 ...(this.overrideConfig ?? {}),
                 ...(arg.overrideConfig ?? {})
             }

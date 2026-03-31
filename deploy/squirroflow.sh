@@ -19,6 +19,7 @@ cd "$SCRIPT_DIR"
 COMMAND="${1:-deploy}"
 ORCH_WORKERS="${ORCH_WORKERS:-5}"
 SUB_WORKERS="${SUB_WORKERS:-10}"
+SRC_DIR="${SQUIRROFLOW_SRC:-${SCRIPT_DIR}/../squirroflow-src}"
 
 # --- Helper functions ---
 
@@ -88,6 +89,16 @@ case "$COMMAND" in
         ensure_env
         ensure_volume
 
+        # Build images if source is available
+        if [ -d "$SRC_DIR" ]; then
+            echo "Building images from source..."
+            cp "${SCRIPT_DIR}/Dockerfile" "${SRC_DIR}/deploy-Dockerfile"
+            cd "$SRC_DIR"
+            docker build --target main -t squirroflow:latest -f deploy-Dockerfile .
+            docker build --target worker -t squirroflow-worker:latest -f deploy-Dockerfile .
+            cd "$SCRIPT_DIR"
+        fi
+
         echo "Deploying SquirroFlow two-stack: ${ORCH_WORKERS} orchestrator + ${SUB_WORKERS} sub-chatflow workers..."
         docker compose up -d \
             --scale squirroflow-orch-worker="${ORCH_WORKERS}" \
@@ -126,12 +137,35 @@ case "$COMMAND" in
         done
         ;;
 
+    build)
+        if [ ! -d "$SRC_DIR" ]; then
+            echo "Source directory not found: $SRC_DIR"
+            echo "Clone the repo first: git clone https://github.com/squirro/SquirroFlow.git $SRC_DIR"
+            exit 1
+        fi
+
+        echo "Building SquirroFlow images from $SRC_DIR..."
+        cp "${SCRIPT_DIR}/Dockerfile" "${SRC_DIR}/deploy-Dockerfile"
+        cd "$SRC_DIR"
+        docker build --target main -t squirroflow:latest -f deploy-Dockerfile .
+        docker build --target worker -t squirroflow-worker:latest -f deploy-Dockerfile .
+        echo "Built squirroflow:latest and squirroflow-worker:latest"
+        ;;
+
     *)
-        echo "Usage: $0 [deploy|restart|stop|status]"
+        echo "Usage: $0 [build|deploy|restart|stop|status]"
+        echo ""
+        echo "Commands:"
+        echo "  build    Build Docker images from source"
+        echo "  deploy   Build images (if source available) and start services"
+        echo "  restart  Restart existing services"
+        echo "  stop     Stop all services"
+        echo "  status   Show service status"
         echo ""
         echo "Environment variables:"
-        echo "  ORCH_WORKERS  Orchestrator worker count (default: 5)"
-        echo "  SUB_WORKERS   Sub-chatflow worker count (default: 10)"
+        echo "  ORCH_WORKERS       Orchestrator worker count (default: 5)"
+        echo "  SUB_WORKERS        Sub-chatflow worker count (default: 10)"
+        echo "  SQUIRROFLOW_SRC    Path to SquirroFlow source (default: ../squirroflow-src)"
         exit 1
         ;;
 esac

@@ -15,19 +15,20 @@ results, causing deadlock if all workers are occupied. Two stacks make deadlock 
 ## Deploy to a remote server
 
 ```bash
-# First deployment
+# First deployment — clones source, builds images, starts services
 ./deploy.sh adcb-poc.squirro.cloud
 
 # Then edit .env on the server:
-ssh adcb-poc.squirro.cloud "vi /opt/squirroflow/.env"
+ssh adcb-poc.squirro.cloud "vi ~/squirroflow/.env"
 
-# Re-deploy with the updated config
+# Re-deploy (pulls latest source, rebuilds, restarts)
 ./deploy.sh adcb-poc.squirro.cloud
 
 # Other commands
-./deploy.sh adcb-poc.squirro.cloud restart
-./deploy.sh adcb-poc.squirro.cloud stop
-./deploy.sh adcb-poc.squirro.cloud status
+./deploy.sh adcb-poc.squirro.cloud restart    # Restart without rebuilding
+./deploy.sh adcb-poc.squirro.cloud build      # Build images only
+./deploy.sh adcb-poc.squirro.cloud stop       # Stop all services
+./deploy.sh adcb-poc.squirro.cloud status     # Show service status
 
 # Custom worker counts
 ORCH_WORKERS=3 SUB_WORKERS=15 ./deploy.sh adcb-poc.squirro.cloud
@@ -36,14 +37,30 @@ ORCH_WORKERS=3 SUB_WORKERS=15 ./deploy.sh adcb-poc.squirro.cloud
 ## Run locally on the server
 
 ```bash
-cd /opt/squirroflow
+cd ~/squirroflow
 cp .env.example .env
 # Edit .env with your settings
-./squirroflow.sh              # Deploy
-./squirroflow.sh restart      # Restart
+
+./squirroflow.sh build        # Build images from source
+./squirroflow.sh deploy       # Build + start (builds if source is available)
+./squirroflow.sh restart      # Restart without rebuilding
 ./squirroflow.sh stop         # Stop
 ./squirroflow.sh status       # Status
 ```
+
+## Building images
+
+Images are built from SquirroFlow source using `deploy/Dockerfile` with multi-stage targets:
+
+```bash
+# From the SquirroFlow source directory:
+docker build --target main -t squirroflow:latest -f deploy-Dockerfile .
+docker build --target worker -t squirroflow-worker:latest -f deploy-Dockerfile .
+```
+
+The `squirroflow.sh build` and `squirroflow.sh deploy` commands handle this automatically.
+Source is expected at `../squirroflow-src` relative to the deploy directory, or set
+`SQUIRROFLOW_SRC` to override.
 
 ## Post-deploy configuration
 
