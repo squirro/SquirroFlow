@@ -26,18 +26,18 @@ SRC_DIR="${SQUIRROFLOW_SRC_DIR:-/home/\$(whoami)/squirroflow-src}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "Syncing deploy files to ${HOST_NAME}..."
-ssh "$HOST_NAME" "mkdir -p \$(eval echo ${DEPLOY_DIR})"
+# Resolve remote paths once
+REMOTE_DEPLOY_DIR=$(ssh "$HOST_NAME" "eval echo ${DEPLOY_DIR}")
+REMOTE_SRC_DIR=$(ssh "$HOST_NAME" "eval echo ${SRC_DIR}")
+
+echo "Syncing deploy files to ${HOST_NAME}:${REMOTE_DEPLOY_DIR}..."
+ssh "$HOST_NAME" "mkdir -p ${REMOTE_DEPLOY_DIR}"
 scp "${SCRIPT_DIR}/docker-compose.yml" \
     "${SCRIPT_DIR}/squirroflow.sh" \
     "${SCRIPT_DIR}/.env.example" \
     "${SCRIPT_DIR}/Dockerfile" \
-    "${HOST_NAME}:$(ssh "$HOST_NAME" "eval echo ${DEPLOY_DIR}")/"
-ssh "$HOST_NAME" "chmod +x $(eval echo ${DEPLOY_DIR})/squirroflow.sh"
-
-# Ensure source repo is cloned on the remote
-REMOTE_DEPLOY_DIR=$(ssh "$HOST_NAME" "eval echo ${DEPLOY_DIR}")
-REMOTE_SRC_DIR=$(ssh "$HOST_NAME" "eval echo ${SRC_DIR}")
+    "${HOST_NAME}:${REMOTE_DEPLOY_DIR}/"
+ssh "$HOST_NAME" "chmod +x ${REMOTE_DEPLOY_DIR}/squirroflow.sh"
 ssh "$HOST_NAME" "if [ ! -d ${REMOTE_SRC_DIR} ]; then echo 'Cloning SquirroFlow source...'; git clone https://github.com/squirro/SquirroFlow.git ${REMOTE_SRC_DIR}; else echo 'Updating SquirroFlow source...'; cd ${REMOTE_SRC_DIR} && git pull; fi"
 
 # Pass worker counts and source dir through
