@@ -1823,13 +1823,37 @@ export const processTemplateVariables = (state: ICommonObject, finalOutput: any,
     for (const key in newState) {
         const stateValue = newState[key].toString().trim()
 
-        // Handle {{ tools }} and {{ tools.N }} template variables
+        // Handle {{ tools }} and {{ tools.name }} template variables
         if (stateValue.includes('{{ tools') || stateValue.includes('{{tools')) {
             const toolOutputs = (usedTools || []).map((t: any) => t.toolOutput ?? '')
 
             // {{ tools }} — all tool outputs as JSON array
             if (/^\{\{\s*tools\s*\}\}$/.test(stateValue.replace(/\s+/g, ' ').trim())) {
                 newState[key] = JSON.stringify(toolOutputs)
+                continue
+            }
+
+            // {{ tools.name }} — tool output by name (e.g. {{ tools.googleSearch }})
+            const toolNameMatch = stateValue.match(/\{\{\s*tools\.([a-zA-Z_]\w*)\s*\}\}/)
+            if (toolNameMatch) {
+                const toolName = toolNameMatch[1]
+                const matched = (usedTools || []).find((t: any) => t.tool === toolName)
+                newState[key] = matched ? (matched.toolOutput ?? '') : ''
+                continue
+            }
+
+            // {{ tools.name.field }} — specific field of a named tool
+            const toolNameFieldMatch = stateValue.match(/\{\{\s*tools\.([a-zA-Z_]\w*)\.([\w.]+)\s*\}\}/)
+            if (toolNameFieldMatch) {
+                const toolName = toolNameFieldMatch[1]
+                const field = toolNameFieldMatch[2]
+                const matched = (usedTools || []).find((t: any) => t.tool === toolName)
+                if (matched) {
+                    const value = get(matched, field)
+                    newState[key] = value !== undefined ? (typeof value === 'object' ? JSON.stringify(value) : value) : ''
+                } else {
+                    newState[key] = ''
+                }
                 continue
             }
 

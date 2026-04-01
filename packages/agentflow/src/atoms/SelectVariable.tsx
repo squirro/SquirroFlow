@@ -1,5 +1,5 @@
 import { Box, List, ListItem, ListItemAvatar, ListItemButton, ListItemText, Stack, Typography } from '@mui/material'
-import { IconBinaryTree, IconHistory, IconMessageChatbot, IconPaperclip } from '@tabler/icons-react'
+import { IconBinaryTree, IconHistory, IconMessageChatbot, IconPaperclip, IconTool } from '@tabler/icons-react'
 
 export interface VariableItem {
     label: string
@@ -18,6 +18,7 @@ export interface SelectVariableProps {
 const CATEGORY_STYLE: Record<string, { icon: React.ElementType; color: string }> = {
     'Chat Context': { icon: IconMessageChatbot, color: '#6EC6E6' },
     'Node Outputs': { icon: IconHistory, color: '#64B5F6' },
+    'Tool Outputs': { icon: IconTool, color: '#81C784' },
     'Flow State': { icon: IconBinaryTree, color: '#FFA07A' }
 }
 

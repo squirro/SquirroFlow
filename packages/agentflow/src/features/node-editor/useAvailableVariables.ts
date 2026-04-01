@@ -75,6 +75,28 @@ export function useAvailableVariables(nodeId: string): VariableItem[] {
             })
         }
 
+        // ── Tool outputs (for Agent nodes with connected tools) ────────────
+        const currentNode = nodes.find((n) => n.id === nodeId)
+        if (currentNode?.data.name === 'agentAgentflow') {
+            const agentTools = currentNode.data.inputValues?.agentTools as
+                | { agentSelectedTool: string; agentSelectedToolConfig?: Record<string, unknown> }[]
+                | undefined
+            if (Array.isArray(agentTools)) {
+                for (const tool of agentTools) {
+                    const toolName =
+                        (tool.agentSelectedToolConfig?.name as string) || tool.agentSelectedTool
+                    if (toolName) {
+                        items.push({
+                            label: `tools.${toolName}`,
+                            description: `Output from the ${toolName} tool`,
+                            category: 'Tool Outputs',
+                            value: `{{ tools.${toolName} }}`
+                        })
+                    }
+                }
+            }
+        }
+
         // ── Flow state variables from startAgentflow node ────────────────
         const startNode = nodes.find((n) => n.data.name === 'startAgentflow')
         if (startNode) {
